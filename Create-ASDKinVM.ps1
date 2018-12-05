@@ -1,14 +1,23 @@
-﻿# Create Asure Stack Development Kit in a Hyper-V VM
+# Create Asure Stack Development Kit in a Hyper-V VM
 <#
 .Synopsis
    Script to Create ASDK Hyper-V VM
    Copyright 2018 by Carsten Rachfahl Rachfahl IT-Solutions GmbH & Co.KG
-   Version 1.0
-   1.0 6.4.2018 cr First draft
+   Version 1.8
+   1.0 06.04.2018 cr First draft
+   1.1 08.04.2018 cr Added DNSServerIP, NTPServerIP and IPSubnetMask parameter
+   1.2 20.04.2018 cr Added VMGWIP parameter
+   1.3 03.05.2018 bf Mask Password
+   1.4 17.05.2018 cr Add Installation of PowerShell for Azure Stack & Download ConfigASDK.ps1
+   1.5 23.05.2018 cr Automatic start of ConfigASDK.ps1
+   1.6 20.10.2018 cr Creation of Drive D
+   1.7 23.10.2018 cr Added Azure Subscription ID to process
+   1.8 02.11.2018 cr Added Windows 10 Hyper-V suport (less Memory, Checkpoint setings)
+
 .DESCRIPTION
    Script creates a Hyper-V VM that is capable to host an Azure Stack Development Kit Installation
 .EXAMPLE
-   Create-ASDKVM.ps1 -VMName "AST1804-02" -VMPath "\\DellSOFS\Share1" -VMIP 172.16.0.2 -GBPNatIP 172.16.0.3 -CloudBuilderDisk "C:\ClusterStorage\COLLECT\Azure Stack Dev Kit\CloudBuilder.vhdx" -LocalAdminPassword Password! -$AzureTenantAdminName @admin@RITSASTPoC.onmicrosoft.com -$AzureTenantAdminPassord Password! -MemoryinGB 128 -Cores 12
+   Create-ASDKVM.ps1 -VMName "AST1804-02" -VMPath "\\DellSOFS\Share1" -VMIP 172.16.0.2 -BGPNatIP 172.16.0.3 -VMGWIP 172.16.0.1 -IPSubnetMask 24 -DNSServerIP 192.168.57.3 -NTPServerIP 192.168.57.254 -CloudBuilderDisk "C:\ClusterStorage\COLLECT\Azure Stack Dev Kit\CloudBuilder.vhdx" -LocalAdminPassword Password! -$AzureTenantAdminName admin@RITSASTPoC.onmicrosoft.com -$AzureTenantAdminPassord Password! -MemoryinGB 128 -Cores 12
 .EXAMPLE
 #>
 
@@ -40,42 +49,72 @@ Param
                Position=3)]
     [String]$BGPNatIP,
 
-    # CloudBuilderDisk
+    # VMGWIP
     [Parameter(Mandatory=$true,
                ValueFromPipelineByPropertyName=$true,
                Position=4)]
+    [String]$VMGWIP,
+
+    # IPSubnetMask
+    [Parameter(Mandatory=$true,
+               ValueFromPipelineByPropertyName=$true,
+               Position=5)]
+               [ValidateRange(8,32)]
+    [int]$IPSubnetMask,    
+
+    # DNSServerIP
+    [Parameter(Mandatory=$true,
+               ValueFromPipelineByPropertyName=$true,
+               Position=6)]
+    [String]$DNSServerIP,
+
+    # NTPServerIP
+    [Parameter(Mandatory=$true,
+               ValueFromPipelineByPropertyName=$true,
+               Position=7)]
+    [String]$NTPServerIP,
+
+    # CloudBuilderDisk
+    [Parameter(Mandatory=$true,
+               ValueFromPipelineByPropertyName=$true,
+               Position=8)]
     [String]$CloudBuilderDisk,
 
     # LocalAdminPassword
     [Parameter(Mandatory=$true,
                ValueFromPipelineByPropertyName=$true,
-               Position=5)]
+               Position=9)]
     [String]$LocalAdminPassword,
 
     # AzureTenantAdminName
     [Parameter(Mandatory=$true,
                ValueFromPipelineByPropertyName=$true,
-               Position=6)]
+               Position=10)]
     [String]$AzureTenantAdminName,
-
 
     # AzureTenantAdminPassword
     [Parameter(Mandatory=$true,
                ValueFromPipelineByPropertyName=$true,
-               Position=7)]
+               Position=11)]
     [String]$AzureTenantAdminPassword,
+
+    #$AzureTenantSubcriptionID
+    [Parameter(Mandatory=$true,
+               ValueFromPipelineByPropertyName=$true,
+               Position=12)]
+    [String]$AzureTenantSubcriptionID,
 
     # $MemoryinGB
     [Parameter(Mandatory=$false,
                ValueFromPipelineByPropertyName=$true,
-               Position=8)]
+               Position=13)]
     [ValidateRange(96,512)]
-    [int]$MemoryinGB = 200,
+    [int]$MemoryinGB = 115,
 
     # Cores
     [Parameter(Mandatory=$false,
                ValueFromPipelineByPropertyName=$true,
-               Position=9)]
+               Position=14)]
     [ValidateRange(12,32)]
     [int]$Cores = 12
 )
@@ -109,13 +148,17 @@ $localAdmin = 'Administrator'
 $localAdminPWord = ConvertTo-SecureString –String "$LocalAdminPassword" –AsPlainText -Force
 $localAdminCredential = New-Object –TypeName System.Management.Automation.PSCredential –ArgumentList $localAdmin, $LocalAdminPWord
 
+# Path
+$ConfigDirName = 'AdditionalSoftware'
+#$AditionalSoftwareDir = 'C:\ClusterStorage\COLLECT\AzureStack DevKit\' + $ConfigDirName
+$AditionalSoftwareDir = 'C:\Projekte\Azure Stack Dev Kit\' + $ConfigDirName
+$DDriveName = 'DDrive'
+$DDriveSize = 50GB
+
 #VM releated
 $HVSWitch = 'NATSwitch'
-$IPSubNetNAT = '172.16.0.0/24'
-$IPSubNetMask = $IPSubNetNAT.Substring($IPSubNetNAT.LastIndexOf('/')+1)
-$DNSServerIP = '192.168.209.2'
-$DefaultGatewayIP = '172.16.0.1'
-$NTPServerIP = '192.168.209.2'
+$IPSubNetNAT = $($VMIP.Substring(0,$VMIP.LastIndexOf('.')+1)+'0/'+[String]$IPSubnetMask)
+$DefaultGatewayIP = $VMGWIP
 $VMGeneration = 2
 $VMMemory = $MemoryinGB * 1GB
 $vmProcCount  = $Cores
@@ -125,7 +168,6 @@ $VDiskSize = 200GB
 #endregion
 
 #region Unattend.xml Handling
-#$UnattendFile = $DiskPath+'\Temp\'+$VMName+'-Unattend.xml'
 $ComputerName = '*'
 $Organization = 'PowerKurs'
 $Owner = 'PowerKurs'
@@ -137,6 +179,30 @@ $adminPassword = "$LocalAdminPassword"
 $WindowsKey = 'CB7KF-BWN84-R7R2Y-793K2-8XDDG'
 
 
+#Operation System
+$OSType = (Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" -Name InstallationType).InstallationType
+$OSBuild = [environment]::OSVersion.Version.Build
+if($OSType -eq "Server") {
+    if(($OSBuild -ge 17763)) {
+        Write-Verbose "Running on Windows Server 2019"
+        $OSString = "Server2019"
+    } elseif ($OSBuild -ge 14393) {
+        Write-Verbose "Running on Windows Server 2016"
+        $OSString = "Server2016"        
+    } else {
+        Write-Error "Script needs at least Windows Server 2016 to execute"
+        break 
+    }
+} elseif ($OSType -eq "Client") {
+    if(($OSBuild -ge 14393)) {
+        Write-Verbose "Running on Windows 10"
+        $OSString = "Client10"  
+    } else {
+        Write-Verbose "Running not on Windows 10"
+        Write-Error "Script needs at least Windows 10 to execute"
+        break 
+    }
+} 
 
 ### Sysprep unattend XML
 $unattendSource = [xml]@"
@@ -273,21 +339,39 @@ $OSVolumes = $VHD | Get-Disk | Get-Partition | Get-Volume
 $DriveLetterAssigned = $false
 foreach($Drive in $OSVolumes) {
     if(($Drive.DriveLetter -ne '') -and ($Drive.DriveLetter -ne $Null)) {
-        $DriveLetterAssigned = $true
-        Copy-Item $UnattendFile -Destination $($Drive.DriveLetter + ':\Unattend.xml')  
+        $IsOSDrive = Test-Path -Path $($Drive.DriveLetter + ':\Windows')
+        if($IsOSDrive) {
+            $DriveLetterAssigned = $true
+            $DriveLetter = $Drive.DriveLetter
+            Copy-Item $UnattendFile -Destination $($DriveLetter + ':\Unattend.xml')  
+        }
     }    
 }
 if($DriveLetterAssigned -ne $true) {
-    $OSPartition = ($VHD | Get-Disk | Get-Partition | where Size  -gt 5GB | Set-Partition -NewDriveLetter O)
-    Copy-Item $UnattendFile -Destination 'O:\Unattend.xml'
+    $DriveLetter = 'O'
+    $OSPartition = ($VHD | Get-Disk | Get-Partition | where Size  -gt 5GB | Set-Partition -NewDriveLetter $DriveLetter)
+    Copy-Item $UnattendFile -Destination $($DriveLetter + ':\Unattend.xml')
     $DriveLetterAssigned = $true
 }      
+
+# Coppy aditional Software into VHDX
+$ConfigDirPath = $($DriveLetter + ':\' + $ConfigDirName)
+New-Item -Path $ConfigDirPath -ItemType Directory
+Copy-Item -Path $($AditionalSoftwareDir + '\*') -Destination $($ConfigDirPath) -Confirm:$false -Recurse 
+
+#dismount VHDX
 Dismount-VHD -Path $($VHDDirectory+'\'+$OSVHDName)
 Add-VMHardDiskDrive -VMName $VMName -Path $($VHDDirectory+'\'+$OSVHDName)
 
 #Set firtst Boot Device to CloudBuilder VHDX
 $BootVHDX = Get-VMHardDiskDrive -VMName $VMName -ControllerNumber 0
 Set-VMFirmware -VMName $VMName -FirstBootDevice $BootVHDX
+
+
+#create DDrive
+$DiskPath = $("$VHDDirectory\$DDriveName"+'.vhdx')
+New-VHD -Path $DiskPath -SizeBytes $DDriveSize -Dynamic
+Add-VMHardDiskDrive -VMName $VMName -Path $DiskPath
 
 #Set Shutdown behavior to Shutdown
 Set-VM -VMName $VMName -AutomaticStopAction Shutdown
@@ -304,6 +388,10 @@ Disable-VMIntegrationService -VMName $VMName -Name "Time Synchronization"
 #Enable MacAddress Spoofing
 Set-VMNetworkAdapter -VMName $VMName -MacAddressSpoofing on
 
+#if Host is not Windows Server turn of atomatic Checkpoints
+if($OSString -like "Client*") {
+    Set-VM -VMName $VMName -AutomaticCheckpointsEnabled $false -CheckpointType Standard
+}
 #endregion
 
 
@@ -330,7 +418,7 @@ Wait-ForPSDirect $VMName $localAdminCredential
 
 #region prepare ASDK VM
 $PSSession = New-PSSession -VMName $VMName -Credential $LocalAdminCredential
-Invoke-Command -Session $PSSession -ArgumentList $VMIP, $IPSubNetMask, $BGPNatIP, $DNSServerIP, $DefaultGatewayIP, $NTPServerIP, $LocalAdminPassword, $AzureTenantAdminName, $AzureTenantAdminPassword -ScriptBlock {
+Invoke-Command -Session $PSSession -ArgumentList $VMIP, $IPSubNetMask, $BGPNatIP, $DNSServerIP, $DefaultGatewayIP, $NTPServerIP, $LocalAdminPassword, $AzureTenantAdminName, $AzureTenantAdminPassword, $AzureTenantSubcriptionID, $ConfigDirName, $DDriveName -ScriptBlock {
     param(
         $IP,
         $IPSubNetMask,
@@ -340,21 +428,37 @@ Invoke-Command -Session $PSSession -ArgumentList $VMIP, $IPSubNetMask, $BGPNatIP
         $NTPServerIP,
         $LocalAdminPassword,
         $AzureTenantAdminName,
-        $AzureTenantAdminPassword 
+        $AzureTenantAdminPassword,
+        $AzureTenantSubcriptionID,
+        $ConfigDirName,
+        $DDriveName
     )
+
     
     #Variables
-    $InstallFile = "C:\Install-AzureStackPoC.ps1"
+    $ConfigDir = 'C:\' + $ConfigDirName
+    $InstallASDKScript = "$ConfigDir\Install-AzureStackPoC.ps1"
+    $ConfigASKScript = "$ConfigDir\Configure-AzureStackPoC.ps1"
+    $InstallTaskScript = "$ConfigDir\InstallTask.ps1"
     $AzureTenenantName = $AzureTenantAdminName.Substring($AzureTenantAdminName.LastIndexOf('@')+1)
     $SubnetwithMask = $($IP.Substring(0,$IP.LastIndexOf('.'))+'.0/'+$IPSubNetMask)
     $localAdminPWord = ConvertTo-SecureString –String "$LocalAdminPassword" –AsPlainText -Force
     $AADTenantAdminPWord = ConvertTo-SecureString –String "$AzureTenantAdminPassword" –AsPlainText -Force
     $AADCredential = New-Object –TypeName System.Management.Automation.PSCredential –ArgumentList $AzureTenantAdminName, $AADTenantAdminPWord
-  
+ 
 
     #rezize CloudBuilder Partition
     $size = (Get-PartitionSupportedSize –DiskNumber 0 –PartitionNumber 2)
     Resize-Partition -DiskNumber 0 –PartitionNumber 2 -Size $size.SizeMax
+
+    #Bring Online D Disk
+    $DriveFound = $false
+    $Disk = Get-Disk | where Number -eq 1 
+    Set-Disk -Number $Disk.DiskNumber -IsOffline $false
+    Initialize-Disk $Disk.DiskNumber
+    $partition = New-Partition -DriveLetter D -UseMaximumSize -DiskNumber $Disk.DiskNumber
+    $volume = Format-Volume -FileSystem NTFS -NewFileSystemLabel $DDriveName -Confirm:$false -Force -Partition $partition
+
 
     # set IP Config
     $NetAdapter = Get-NetAdapter
@@ -370,26 +474,50 @@ Invoke-Command -Session $PSSession -ArgumentList $VMIP, $IPSubNetMask, $BGPNatIP
     Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Active Setup\Installed Components\{A509B1A7-37EF-4b3f-8CFC-4F3A74704073}" -Name "IsInstalled" -Value 0
     Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Active Setup\Installed Components\{A509B1A8-37EF-4b3f-8CFC-4F3A74704073}" -Name "IsInstalled" -Value 0
 
-    #create Azure Stack Installation File
-    "# Script to start Azure Stack Development Kit Installation" | Out-File -FilePath $InstallFile
-    " "  | Out-File -FilePath $InstallFile -Append
-    "#Variable"  | Out-File -FilePath $InstallFile -Append
-    $String1 = '$localAdminPWord = ConvertTo-SecureString –String ' + "$LocalAdminPassword –AsPlainText -Force" 
-    $String1 | Out-File -FilePath $InstallFile -Append
+
+    #Find Windows Server ISO in ConfigDir
+    $WindowsServerISOName = (Get-Item -Path $($ConfigDir + '\*') -Include "*_SERVER_*.iso").FullName
+
+    #create Azure Stack Installation Script
+    "# Script to start Azure Stack Development Kit Installation" | Out-File -FilePath $InstallASDKScript
+    " "  | Out-File -FilePath $InstallASDKScript -Append
+    "#Variable"  | Out-File -FilePath $InstallASDKScript -Append
+    $OutPutString = '$localAdminPWord = ConvertTo-SecureString –String ' + """$LocalAdminPassword"" –AsPlainText -Force" 
+    $OutPutString | Out-File -FilePath $InstallASDKScript -Append
     
-    $String2 = '$AADTenantAdminPWord = ConvertTo-SecureString –String ' + "$AzureTenantAdminPassword –AsPlainText -Force" 
-    $String2 | Out-File -FilePath $InstallFile -Append
+    $OutPutString = '$AADTenantAdminPWord = ConvertTo-SecureString –String ' + """$AzureTenantAdminPassword"" –AsPlainText -Force" 
+    $OutPutString | Out-File -FilePath $InstallASDKScript -Append
 
-    $String3 = '$AADCredential = New-Object –TypeName System.Management.Automation.PSCredential –ArgumentList ' + "$AzureTenantAdminName, " +'$AADTenantAdminPWord'
-    $String3 | Out-File -FilePath $InstallFile -Append
+    $OutPutString = '$AADCredential = New-Object –TypeName System.Management.Automation.PSCredential –ArgumentList ' + """$AzureTenantAdminName"", " +'$AADTenantAdminPWord'
+    $OutPutString | Out-File -FilePath $InstallASDKScript -Append
 
-    " "  | Out-File -FilePath $InstallFile -Append
-    "Set-Location C:\CloudDeployment\Setup" | Out-File -FilePath $InstallFile -Append
-    $String4 = './InstallAzureStackPOC.ps1 -AdminPassword $LocalAdminPWord -InfraAzureDirectoryTenantName "' + "$AzureTenenantName" +'" -InfraAzureDirectoryTenantAdminCredential $AADCredential -NATIPv4Subnet ' + "$SubnetwithMask -NATIPv4Address $BGPNatIP -NATIPv4DefaultGateway $DefaultGatewayIP -TimeServer $NTPServerIP -Verbose"
-    $String4 |  Out-File -FilePath $InstallFile -Append
+    " "  | Out-File -FilePath $InstallASDKScript -Append
+    "# Script to configure Azure Stack Development Kit"  | Out-File -FilePath $InstallASDKScript -Append
+    "Set-Location C:\CloudDeployment\Setup" | Out-File -FilePath $InstallASDKScript -Append
+    $OutPutString = './InstallAzureStackPOC.ps1 -AdminPassword $LocalAdminPWord -InfraAzureDirectoryTenantName "' + "$AzureTenenantName" +'" -InfraAzureDirectoryTenantAdminCredential $AADCredential -NATIPv4Subnet ' + "$SubnetwithMask -NATIPv4Address $BGPNatIP -NATIPv4DefaultGateway $DefaultGatewayIP -TimeServer $NTPServerIP -Verbose"
+    $OutPutString |  Out-File -FilePath $InstallASDKScript -Append
+ 
 
-    #start PowerShell to Execute Script
-    start-process powershell -ArgumentList $InstallFile -RedirectStandardOutput "C:\Install-AzureStackPoC-out.txt" -RedirectStandardError "C:\Install-AzureStackPoC-err.txt"
+    #create Azure Stack Configuration Script
+    "# Script to Configure Azure Stack Development Kit" | Out-File -FilePath $ConfigASKScript
+    " "  | Out-File -FilePath $ConfigASKScript -Append
+ 
+    "#Change into Download Dir "  | Out-File -FilePath $ConfigASKScript -Append
+    $OutPutString = 'Set-Location "' + "$ConfigDir" + '"'
+    $OutPutString |  Out-File -FilePath $ConfigASKScript -Append
+    
+    " "  | Out-File -FilePath $ConfigASKScript -Append
+    "# Download the ConfigASDK Script."  | Out-File -FilePath $ConfigASKScript -Append
+    $OutPutString = '[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12'
+    $OutPutString |  Out-File -FilePath $ConfigASKScript -Append
+    $OutPutString = 'Invoke-Webrequest http://bit.ly/configasdk -UseBasicParsing -OutFile ConfigASDK.ps1'
+    $OutPutString |  Out-File -FilePath $ConfigASKScript -Append
+
+    " "  | Out-File -FilePath $ConfigASKScript -Append
+    "# Start the Azure Stack Configuration "  | Out-File -FilePath $ConfigASKScript -Append
+    #$OutPutString = '.\ConfigASDK.ps1 -azureDirectoryTenantName "' + $AzureTenenantName + '" -authenticationType AzureAD -registerASDK -useAzureCredsForRegistration -downloadPath "' + $ConfigDir + '" -ISOPath "' + $WindowsServerISOName + '" -azureStackAdminPwd "' + $LocalAdminPassword + '" -VMpwd "' + $LocalAdminPassword + '" -azureAdUsername "' + $AzureTenantAdminName +'" -azureAdPwd "' + $AzureTenantAdminPassword + '"'
+    $OutPutString = '.\ConfigASDK.ps1 -azureDirectoryTenantName "' + $AzureTenenantName + '" -authenticationType AzureAD -registerASDK -useAzureCredsForRegistration -azureRegSubId "' + $AzureTenantSubcriptionID + '" -downloadPath "' + $ConfigDir + '" -ISOPath "' + $WindowsServerISOName + '" -azureStackAdminPwd "' + $LocalAdminPassword + '" -VMpwd "' + $LocalAdminPassword + '" -azureAdUsername "' + $AzureTenantAdminName +'" -azureAdPwd "' + $AzureTenantAdminPassword + '"'
+    $OutPutString |  Out-File -FilePath $ConfigASKScript -Append
 
 }
 #endregion
