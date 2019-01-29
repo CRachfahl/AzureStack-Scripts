@@ -3,7 +3,7 @@
 .Synopsis
    Script to Create ASDK Hyper-V VM
    Copyright 2018 by Carsten Rachfahl Rachfahl IT-Solutions GmbH & Co.KG
-   Version 1.8
+   Version 1.9
    1.0 06.04.2018 cr First draft
    1.1 08.04.2018 cr Added DNSServerIP, NTPServerIP and IPSubnetMask parameter
    1.2 20.04.2018 cr Added VMGWIP parameter
@@ -13,11 +13,12 @@
    1.6 20.10.2018 cr Creation of Drive D
    1.7 23.10.2018 cr Added Azure Subscription ID to process
    1.8 02.11.2018 cr Added Windows 10 Hyper-V suport (less Memory, Checkpoint setings)
+   1.9 01.01.2019 cr Added support for full Subnet Mask, HVSwitch and VLanID and AutoLogon with Install Script Execution, Enable RDP in Firewall
 
 .DESCRIPTION
    Script creates a Hyper-V VM that is capable to host an Azure Stack Development Kit Installation
 .EXAMPLE
-   Create-ASDKVM.ps1 -VMName "AST1804-02" -VMPath "\\DellSOFS\Share1" -VMIP 172.16.0.2 -BGPNatIP 172.16.0.3 -VMGWIP 172.16.0.1 -IPSubnetMask 24 -DNSServerIP 192.168.57.3 -NTPServerIP 192.168.57.254 -CloudBuilderDisk "C:\ClusterStorage\COLLECT\Azure Stack Dev Kit\CloudBuilder.vhdx" -LocalAdminPassword Password! -$AzureTenantAdminName admin@RITSASTPoC.onmicrosoft.com -$AzureTenantAdminPassord Password! -MemoryinGB 128 -Cores 12
+   Create-ASDKVM.ps1 -VMName "AST1804-02" -VMPath "\\DellSOFS\Share1" -VMIP 172.16.0.2 -BGPNatIP 172.16.0.3 -VMGWIP 172.16.0.1 -IPSubnetwithMask 172.16.0.0/24 -DNSServerIP 192.168.57.3 -NTPServerIP 192.168.57.254 -CloudBuilderDisk "C:\ClusterStorage\COLLECT\Azure Stack Dev Kit\CloudBuilder.vhdx" -LocalAdminPassword Password! -$AzureTenantAdminName admin@RITSASTPoC.onmicrosoft.com -$AzureTenantAdminPassord Password! -MemoryinGB 128 -Cores 12
 .EXAMPLE
 #>
 
@@ -28,12 +29,14 @@ Param
     # VMName
     [Parameter(Mandatory=$true,
                ValueFromPipelineByPropertyName=$true,
+               HelpMessage="Enter VM Name.",
                Position=0)]
     [String]$VMName,
 
     # VMPath
     [Parameter(Mandatory=$true,
                ValueFromPipelineByPropertyName=$true,
+               HelpMessage="Enter Path for VM",
                Position=1)]
     [String]$VMPath,
 
@@ -55,12 +58,11 @@ Param
                Position=4)]
     [String]$VMGWIP,
 
-    # IPSubnetMask
+    # IPSubnetwithMask
     [Parameter(Mandatory=$true,
                ValueFromPipelineByPropertyName=$true,
                Position=5)]
-               [ValidateRange(8,32)]
-    [int]$IPSubnetMask,    
+    [String]$IPSubnetwithMask,    
 
     # DNSServerIP
     [Parameter(Mandatory=$true,
@@ -109,14 +111,27 @@ Param
                ValueFromPipelineByPropertyName=$true,
                Position=13)]
     [ValidateRange(96,512)]
-    [int]$MemoryinGB = 115,
+    [int]$MemoryinGB = 150,
 
     # Cores
     [Parameter(Mandatory=$false,
                ValueFromPipelineByPropertyName=$true,
                Position=14)]
     [ValidateRange(12,32)]
-    [int]$Cores = 12
+    [int]$Cores = 12,
+
+    #HVSwitch
+    [Parameter(Mandatory=$true,
+               ValueFromPipelineByPropertyName=$true,
+               Position=15)]
+    [String]$HVSWitch = 'NATSwitch',
+
+    #VLanID
+    [Parameter(Mandatory=$true,
+               ValueFromPipelineByPropertyName=$true,
+               Position=16)]
+    [ValidateRange(0,4095)]
+    [int]$VLanID = 0
 )
 #endregion
 
@@ -150,14 +165,14 @@ $localAdminCredential = New-Object –TypeName System.Management.Automation.PSCr
 
 # Path
 $ConfigDirName = 'AdditionalSoftware'
-#$AditionalSoftwareDir = 'C:\ClusterStorage\COLLECT\AzureStack DevKit\' + $ConfigDirName
-$AditionalSoftwareDir = 'C:\Projekte\Azure Stack Dev Kit\' + $ConfigDirName
+$AditionalSoftwareDir = 'C:\ClusterStorage\COLLECT\Azure Stack Dev Kit\' + $ConfigDirName
+#$AditionalSoftwareDir = 'C:\Projekte\Azure Stack Dev Kit\' + $ConfigDirName
 $DDriveName = 'DDrive'
 $DDriveSize = 50GB
 
 #VM releated
-$HVSWitch = 'NATSwitch'
-$IPSubNetNAT = $($VMIP.Substring(0,$VMIP.LastIndexOf('.')+1)+'0/'+[String]$IPSubnetMask)
+$IPSubNetNAT = $IPSubnetwithMask
+#$IPSubNetNAT = $($VMIP.Substring(0,$VMIP.LastIndexOf('.')+1)+'0/'+[String]$IPSubnetwithMask)
 $DefaultGatewayIP = $VMGWIP
 $VMGeneration = 2
 $VMMemory = $MemoryinGB * 1GB
@@ -388,9 +403,15 @@ Disable-VMIntegrationService -VMName $VMName -Name "Time Synchronization"
 #Enable MacAddress Spoofing
 Set-VMNetworkAdapter -VMName $VMName -MacAddressSpoofing on
 
+#Set VLanID
+if($VLanID -ne 0) {
+Get-VMNetworkAdapter -VMName $VMName | Set-VMNetworkAdapterVlan -Access -VlanId $VLanID
+}
+
 #if Host is not Windows Server turn of atomatic Checkpoints
 if($OSString -like "Client*") {
     Set-VM -VMName $VMName -AutomaticCheckpointsEnabled $false -CheckpointType Standard
+    Set-VM -VMName $VMName -StaticMemory 115GB 
 }
 #endregion
 
@@ -418,10 +439,10 @@ Wait-ForPSDirect $VMName $localAdminCredential
 
 #region prepare ASDK VM
 $PSSession = New-PSSession -VMName $VMName -Credential $LocalAdminCredential
-Invoke-Command -Session $PSSession -ArgumentList $VMIP, $IPSubNetMask, $BGPNatIP, $DNSServerIP, $DefaultGatewayIP, $NTPServerIP, $LocalAdminPassword, $AzureTenantAdminName, $AzureTenantAdminPassword, $AzureTenantSubcriptionID, $ConfigDirName, $DDriveName -ScriptBlock {
+Invoke-Command -Session $PSSession -ArgumentList $VMIP, $IPSubNetwithMask, $BGPNatIP, $DNSServerIP, $DefaultGatewayIP, $NTPServerIP, $LocalAdminPassword, $AzureTenantAdminName, $AzureTenantAdminPassword, $AzureTenantSubcriptionID, $ConfigDirName, $DDriveName -ScriptBlock {
     param(
         $IP,
-        $IPSubNetMask,
+        $IPSubNetwithMask,
         $BGPNatIP,
         $DNSServerIP,
         $DefaultGatewayIP,
@@ -441,7 +462,8 @@ Invoke-Command -Session $PSSession -ArgumentList $VMIP, $IPSubNetMask, $BGPNatIP
     $ConfigASKScript = "$ConfigDir\Configure-AzureStackPoC.ps1"
     $InstallTaskScript = "$ConfigDir\InstallTask.ps1"
     $AzureTenenantName = $AzureTenantAdminName.Substring($AzureTenantAdminName.LastIndexOf('@')+1)
-    $SubnetwithMask = $($IP.Substring(0,$IP.LastIndexOf('.'))+'.0/'+$IPSubNetMask)
+    #$SubnetwithMask = $($IP.Substring(0,$IP.LastIndexOf('.'))+'.0/'+$IPSubNetMask)
+    $IPSubNetMask = $IPSubnetwithMask.Substring(($IPSubnetwithMask.LastIndexOf('/')+1),$IPSubnetwithMask.Length-($IPSubnetwithMask.LastIndexOf('/')+1))
     $localAdminPWord = ConvertTo-SecureString –String "$LocalAdminPassword" –AsPlainText -Force
     $AADTenantAdminPWord = ConvertTo-SecureString –String "$AzureTenantAdminPassword" –AsPlainText -Force
     $AADCredential = New-Object –TypeName System.Management.Automation.PSCredential –ArgumentList $AzureTenantAdminName, $AADTenantAdminPWord
@@ -474,6 +496,8 @@ Invoke-Command -Session $PSSession -ArgumentList $VMIP, $IPSubNetMask, $BGPNatIP
     Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Active Setup\Installed Components\{A509B1A7-37EF-4b3f-8CFC-4F3A74704073}" -Name "IsInstalled" -Value 0
     Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Active Setup\Installed Components\{A509B1A8-37EF-4b3f-8CFC-4F3A74704073}" -Name "IsInstalled" -Value 0
 
+    # Enable RDP FireWall Rules
+    Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 
     #Find Windows Server ISO in ConfigDir
     $WindowsServerISOName = (Get-Item -Path $($ConfigDir + '\*') -Include "*_SERVER_*.iso").FullName
@@ -494,7 +518,7 @@ Invoke-Command -Session $PSSession -ArgumentList $VMIP, $IPSubNetMask, $BGPNatIP
     " "  | Out-File -FilePath $InstallASDKScript -Append
     "# Script to configure Azure Stack Development Kit"  | Out-File -FilePath $InstallASDKScript -Append
     "Set-Location C:\CloudDeployment\Setup" | Out-File -FilePath $InstallASDKScript -Append
-    $OutPutString = './InstallAzureStackPOC.ps1 -AdminPassword $LocalAdminPWord -InfraAzureDirectoryTenantName "' + "$AzureTenenantName" +'" -InfraAzureDirectoryTenantAdminCredential $AADCredential -NATIPv4Subnet ' + "$SubnetwithMask -NATIPv4Address $BGPNatIP -NATIPv4DefaultGateway $DefaultGatewayIP -TimeServer $NTPServerIP -Verbose"
+    $OutPutString = './InstallAzureStackPOC.ps1 -AdminPassword $LocalAdminPWord -InfraAzureDirectoryTenantName "' + "$AzureTenenantName" +'" -InfraAzureDirectoryTenantAdminCredential $AADCredential -NATIPv4Subnet "' + "$IPSubnetwithMask" + '"' + " -NATIPv4Address $BGPNatIP -NATIPv4DefaultGateway $DefaultGatewayIP -TimeServer $NTPServerIP -Verbose"
     $OutPutString |  Out-File -FilePath $InstallASDKScript -Append
  
 
@@ -519,6 +543,19 @@ Invoke-Command -Session $PSSession -ArgumentList $VMIP, $IPSubNetMask, $BGPNatIP
     $OutPutString = '.\ConfigASDK.ps1 -azureDirectoryTenantName "' + $AzureTenenantName + '" -authenticationType AzureAD -registerASDK -useAzureCredsForRegistration -azureRegSubId "' + $AzureTenantSubcriptionID + '" -downloadPath "' + $ConfigDir + '" -ISOPath "' + $WindowsServerISOName + '" -azureStackAdminPwd "' + $LocalAdminPassword + '" -VMpwd "' + $LocalAdminPassword + '" -azureAdUsername "' + $AzureTenantAdminName +'" -azureAdPwd "' + $AzureTenantAdminPassword + '"'
     $OutPutString |  Out-File -FilePath $ConfigASKScript -Append
 
+
+    # Configure AutoLogin
+    
+    #region download and install newest NuGet Provider and PSWindowsUpdate Module
+    Install-PackageProvider Nuget -Force
+    $ModuleInstalled = Get-InstalledModule -Name Autologon -ErrorAction SilentlyContinue
+    if(($ModuleInstalled -eq $null) -or ($ModuleInstalled -eq "")) {
+        Install-Module -Name AutoLogon -Force
+    }
+    Write-Output "Enable AutoLogon"
+    Enable-AutoLogon -Username '.\Administrator' -Password $localAdminPWord -LogonCount 1 -ForceAutoLogon -Command "C:\Windows\System32\WindowsPowerShell\v1.0\Powershell.exe -executionPolicy Unrestricted -File $InstallASDKScript"
+    sleep 30
+    Restart-Computer -Force
 }
 #endregion
 
