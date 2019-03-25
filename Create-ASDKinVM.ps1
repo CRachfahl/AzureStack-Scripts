@@ -1,9 +1,9 @@
-# Create Asure Stack Development Kit in a Hyper-V VM
+﻿# Create Asure Stack Development Kit in a Hyper-V VM
 <#
 .Synopsis
    Script to Create ASDK Hyper-V VM
-   Copyright 2018 by Carsten Rachfahl Rachfahl IT-Solutions GmbH & Co.KG
-   Version 1.9
+   Copyright 2018-2019 by Carsten Rachfahl Rachfahl IT-Solutions GmbH & Co.KG
+   Version 2.1
    1.0 06.04.2018 cr First draft
    1.1 08.04.2018 cr Added DNSServerIP, NTPServerIP and IPSubnetMask parameter
    1.2 20.04.2018 cr Added VMGWIP parameter
@@ -14,11 +14,13 @@
    1.7 23.10.2018 cr Added Azure Subscription ID to process
    1.8 02.11.2018 cr Added Windows 10 Hyper-V suport (less Memory, Checkpoint setings)
    1.9 01.01.2019 cr Added support for full Subnet Mask, HVSwitch and VLanID and AutoLogon with Install Script Execution, Enable RDP in Firewall
+   2.0 09.02.2019 cr remove BGPNatIP
+   2.1 23.02.2019 cr add Windows Server 2019 ISO, Move AdditionalSoftware to D
 
 .DESCRIPTION
    Script creates a Hyper-V VM that is capable to host an Azure Stack Development Kit Installation
 .EXAMPLE
-   Create-ASDKVM.ps1 -VMName "AST1804-02" -VMPath "\\DellSOFS\Share1" -VMIP 172.16.0.2 -BGPNatIP 172.16.0.3 -VMGWIP 172.16.0.1 -IPSubnetwithMask 172.16.0.0/24 -DNSServerIP 192.168.57.3 -NTPServerIP 192.168.57.254 -CloudBuilderDisk "C:\ClusterStorage\COLLECT\Azure Stack Dev Kit\CloudBuilder.vhdx" -LocalAdminPassword Password! -$AzureTenantAdminName admin@RITSASTPoC.onmicrosoft.com -$AzureTenantAdminPassord Password! -MemoryinGB 128 -Cores 12
+   Create-ASDKVM.ps1 -VMName "AST1804-02" -VMPath "\\DellSOFS\Share1" -VMIP 172.16.0.2 -VMGWIP 172.16.0.1 -IPSubnetwithMask 172.16.0.0/24 -DNSServerIP 192.168.57.3 -NTPServerIP 192.168.57.254 -CloudBuilderDisk "C:\ClusterStorage\COLLECT\Azure Stack Dev Kit\CloudBuilder.vhdx" -LocalAdminPassword Password! -$AzureTenantAdminName admin@RITSASTPoC.onmicrosoft.com -$AzureTenantAdminPassord Password! -MemoryinGB 128 -Cores 12
 .EXAMPLE
 #>
 
@@ -46,90 +48,84 @@ Param
                Position=2)]
     [String]$VMIP,
 
-    # BGPNatIP
-    [Parameter(Mandatory=$true,
-               ValueFromPipelineByPropertyName=$true,
-               Position=3)]
-    [String]$BGPNatIP,
-
     # VMGWIP
     [Parameter(Mandatory=$true,
                ValueFromPipelineByPropertyName=$true,
-               Position=4)]
+               Position=3)]
     [String]$VMGWIP,
 
     # IPSubnetwithMask
     [Parameter(Mandatory=$true,
                ValueFromPipelineByPropertyName=$true,
-               Position=5)]
+               Position=4)]
     [String]$IPSubnetwithMask,    
 
     # DNSServerIP
     [Parameter(Mandatory=$true,
                ValueFromPipelineByPropertyName=$true,
-               Position=6)]
+               Position=5)]
     [String]$DNSServerIP,
 
     # NTPServerIP
     [Parameter(Mandatory=$true,
                ValueFromPipelineByPropertyName=$true,
-               Position=7)]
+               Position=6)]
     [String]$NTPServerIP,
 
     # CloudBuilderDisk
     [Parameter(Mandatory=$true,
                ValueFromPipelineByPropertyName=$true,
-               Position=8)]
+               Position=7)]
     [String]$CloudBuilderDisk,
 
     # LocalAdminPassword
     [Parameter(Mandatory=$true,
                ValueFromPipelineByPropertyName=$true,
-               Position=9)]
+               Position=8)]
     [String]$LocalAdminPassword,
 
     # AzureTenantAdminName
     [Parameter(Mandatory=$true,
                ValueFromPipelineByPropertyName=$true,
-               Position=10)]
+               Position=9)]
     [String]$AzureTenantAdminName,
 
     # AzureTenantAdminPassword
     [Parameter(Mandatory=$true,
                ValueFromPipelineByPropertyName=$true,
-               Position=11)]
+               Position=10)]
     [String]$AzureTenantAdminPassword,
 
     #$AzureTenantSubcriptionID
     [Parameter(Mandatory=$true,
                ValueFromPipelineByPropertyName=$true,
-               Position=12)]
+               Position=11)]
     [String]$AzureTenantSubcriptionID,
 
     # $MemoryinGB
-    [Parameter(Mandatory=$false,
+    [Parameter(Mandatory=$true,
                ValueFromPipelineByPropertyName=$true,
-               Position=13)]
+               Position=12)]
     [ValidateRange(96,512)]
-    [int]$MemoryinGB = 150,
+    [int]$MemoryinGB,
 
     # Cores
     [Parameter(Mandatory=$false,
                ValueFromPipelineByPropertyName=$true,
-               Position=14)]
+               Position=13)]
     [ValidateRange(12,32)]
     [int]$Cores = 12,
 
     #HVSwitch
     [Parameter(Mandatory=$true,
                ValueFromPipelineByPropertyName=$true,
-               Position=15)]
+               Position=14)]
     [String]$HVSWitch = 'NATSwitch',
 
     #VLanID
     [Parameter(Mandatory=$true,
                ValueFromPipelineByPropertyName=$true,
-               Position=16)]
+               Position=15)]
     [ValidateRange(0,4095)]
     [int]$VLanID = 0
 )
@@ -158,43 +154,8 @@ function Calc-IPAddress {
 }
 #endregion
 
-#region Variables
-$localAdmin = 'Administrator'
-$localAdminPWord = ConvertTo-SecureString –String "$LocalAdminPassword" –AsPlainText -Force
-$localAdminCredential = New-Object –TypeName System.Management.Automation.PSCredential –ArgumentList $localAdmin, $LocalAdminPWord
 
-# Path
-$ConfigDirName = 'AdditionalSoftware'
-$AditionalSoftwareDir = 'C:\ClusterStorage\COLLECT\Azure Stack Dev Kit\' + $ConfigDirName
-#$AditionalSoftwareDir = 'C:\Projekte\Azure Stack Dev Kit\' + $ConfigDirName
-$DDriveName = 'DDrive'
-$DDriveSize = 50GB
-
-#VM releated
-$IPSubNetNAT = $IPSubnetwithMask
-#$IPSubNetNAT = $($VMIP.Substring(0,$VMIP.LastIndexOf('.')+1)+'0/'+[String]$IPSubnetwithMask)
-$DefaultGatewayIP = $VMGWIP
-$VMGeneration = 2
-$VMMemory = $MemoryinGB * 1GB
-$vmProcCount  = $Cores
-$VDiskNumber = 4
-$CloudBuilderDiskSize = 200GB
-$VDiskSize = 200GB
-#endregion
-
-#region Unattend.xml Handling
-$ComputerName = '*'
-$Organization = 'PowerKurs'
-$Owner = 'PowerKurs'
-$Timezone = 'Pacific Standard Time'
-$InputLocale = 'en-US'
-$SystemLocale = 'en-US'
-$UserLocale = 'en-US'
-$adminPassword = "$LocalAdminPassword"
-$WindowsKey = 'CB7KF-BWN84-R7R2Y-793K2-8XDDG'
-
-
-#Operation System
+#region Get Operation System
 $OSType = (Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion" -Name InstallationType).InstallationType
 $OSBuild = [environment]::OSVersion.Version.Build
 if($OSType -eq "Server") {
@@ -218,6 +179,49 @@ if($OSType -eq "Server") {
         break 
     }
 } 
+#endregion
+
+#region Variables
+$localAdmin = 'Administrator'
+$localAdminPWord = ConvertTo-SecureString –String "$LocalAdminPassword" –AsPlainText -Force
+$localAdminCredential = New-Object –TypeName System.Management.Automation.PSCredential –ArgumentList $localAdmin, $LocalAdminPWord
+
+# Path
+$ConfigDirName = 'AdditionalSoftware'
+if($OSString.ToUpper() -like "SERVER*") {
+    $AditionalSoftwareDir = 'C:\ClusterStorage\COLLECT\Azure Stack Dev Kit\' + $ConfigDirName
+}elseif ($OSString.ToUpper() -like "CLIENT*") {
+    $AditionalSoftwareDir = 'C:\Projekte\Azure Stack Dev Kit\' + $ConfigDirName
+} else {
+    Write-Host -ForegroundColor DarkRed "Can't determine OS"
+    break
+}
+$DDriveName = 'DDrive'
+$DDriveSize = 50GB
+
+#VM releated
+$IPSubNetNAT = $IPSubnetwithMask
+#$IPSubNetNAT = $($VMIP.Substring(0,$VMIP.LastIndexOf('.')+1)+'0/'+[String]$IPSubnetwithMask)
+$DefaultGatewayIP = $VMGWIP
+$VMGeneration = 2
+$VMMemory = $MemoryinGB * 1024*1024*1024
+$vmProcCount  = $Cores
+$VDiskNumber = 6
+$CloudBuilderDiskSize = 200GB
+$VDiskSize = 200GB
+#endregion
+
+#region Unattend.xml Handling
+$ComputerName = '*'
+$Organization = 'PowerKurs'
+$Owner = 'PowerKurs'
+$Timezone = 'Pacific Standard Time'
+$InputLocale = 'en-US'
+$SystemLocale = 'en-US'
+$UserLocale = 'en-US'
+$adminPassword = "$LocalAdminPassword"
+$WindowsKey = 'CB7KF-BWN84-R7R2Y-793K2-8XDDG'
+
 
 ### Sysprep unattend XML
 $unattendSource = [xml]@"
@@ -337,7 +341,9 @@ $VHDDirectory = $VmDirectory+'\Virtual Hard Disks'
 #create Unattended.xml File
 $DiskPath = $CloudBuilderDisk.Substring(0,$CloudBuilderDisk.LastIndexOf('\'))
 $TempDir = $DiskPath.Substring(0,$DiskPath.LastIndexOf('\'))+'\Temp'
-New-Item -Path $TempDir -Type Directory -ErrorAction SilentlyContinue
+if(!(Test-Path $TempDir  -PathType Container)) {
+    New-Item -Path $TempDir -Type Directory -ErrorAction SilentlyContinue
+}
 $UnattendFile = $TempDir+'\'+$VMName+'-Unattend.xml'
 $ComputerName = $VMName
 makeUnattendFile $UnattendFile
@@ -369,10 +375,6 @@ if($DriveLetterAssigned -ne $true) {
     $DriveLetterAssigned = $true
 }      
 
-# Coppy aditional Software into VHDX
-$ConfigDirPath = $($DriveLetter + ':\' + $ConfigDirName)
-New-Item -Path $ConfigDirPath -ItemType Directory
-Copy-Item -Path $($AditionalSoftwareDir + '\*') -Destination $($ConfigDirPath) -Confirm:$false -Recurse 
 
 #dismount VHDX
 Dismount-VHD -Path $($VHDDirectory+'\'+$OSVHDName)
@@ -384,9 +386,20 @@ Set-VMFirmware -VMName $VMName -FirstBootDevice $BootVHDX
 
 
 #create DDrive
-$DiskPath = $("$VHDDirectory\$DDriveName"+'.vhdx')
-New-VHD -Path $DiskPath -SizeBytes $DDriveSize -Dynamic
-Add-VMHardDiskDrive -VMName $VMName -Path $DiskPath
+$DDDiskPath = $("$VHDDirectory\$DDriveName"+'.vhdx')
+New-VHD -Path $DDDiskPath -SizeBytes $DDriveSize -Dynamic
+$DDVHD = Mount-VHD -Path $DDDiskPath –PassThru
+#$DDDisk = Get-VHD -path $DDDiskPath
+Initialize-Disk $DDVHD.DiskNumber
+$DDPartition = New-Partition -AssignDriveLetter -UseMaximumSize -DiskNumber $DDVHD.DiskNumber
+$DDVolume = Format-Volume -FileSystem NTFS -Confirm:$false -Force -Partition $DDPartition
+    
+# Coppy aditional Software into VHDX
+$ConfigDirPath = $($DDVolume.DriveLetter + ':\' + $ConfigDirName)
+New-Item -Path $ConfigDirPath -ItemType Directory
+Copy-Item -Path $($AditionalSoftwareDir + '\*') -Destination $($ConfigDirPath+'\') -Confirm:$false -Recurse -Verbose
+Dismount-VHD -Path $DDDiskPath
+Add-VMHardDiskDrive -VMName $VMName -Path $DDDiskPath
 
 #Set Shutdown behavior to Shutdown
 Set-VM -VMName $VMName -AutomaticStopAction Shutdown
@@ -405,13 +418,15 @@ Set-VMNetworkAdapter -VMName $VMName -MacAddressSpoofing on
 
 #Set VLanID
 if($VLanID -ne 0) {
-Get-VMNetworkAdapter -VMName $VMName | Set-VMNetworkAdapterVlan -Access -VlanId $VLanID
+    Get-VMNetworkAdapter -VMName $VMName | Set-VMNetworkAdapterVlan -Access -VlanId $VLanID
 }
 
 #if Host is not Windows Server turn of atomatic Checkpoints
 if($OSString -like "Client*") {
     Set-VM -VMName $VMName -AutomaticCheckpointsEnabled $false -CheckpointType Standard
-    Set-VM -VMName $VMName -StaticMemory 115GB 
+    if($VMMemory -gt (110*1024*1024*1024)) {
+        Set-VM -VMName $VMName -StaticMemory -MemoryStartupBytes (110*1024*1024*1024)
+       }
 }
 #endregion
 
@@ -455,9 +470,27 @@ Invoke-Command -Session $PSSession -ArgumentList $VMIP, $IPSubNetwithMask, $BGPN
         $DDriveName
     )
 
-    
+    #Bring Online D Disk
+    $Disk = Get-Disk | where Number -eq 1 
+    Set-Disk -Number $Disk.DiskNumber -IsOffline $false
+    Set-Disk -Number $Disk.DiskNumber -isReadonly $false
+
+    #Find ConfigDir
+    $Volumes = Get-Volume
+    foreach($Volume in $Volumes) {
+        if(($Volume.Driveletter -eq "") -or ($Volume.DriveLetter -eq $null)) {
+            continue
+        } else {
+            Write-Output $Volume.Driveletter
+        }
+        $TestPath = $Volume.DriveLetter + ":\" + "$ConfigDirName"
+        if(Test-Path -Path $TestPath -PathType Container) {
+            $ConfigDir = $TestPath
+            break
+        }
+    }
+
     #Variables
-    $ConfigDir = 'C:\' + $ConfigDirName
     $InstallASDKScript = "$ConfigDir\Install-AzureStackPoC.ps1"
     $ConfigASKScript = "$ConfigDir\Configure-AzureStackPoC.ps1"
     $InstallTaskScript = "$ConfigDir\InstallTask.ps1"
@@ -472,15 +505,6 @@ Invoke-Command -Session $PSSession -ArgumentList $VMIP, $IPSubNetwithMask, $BGPN
     #rezize CloudBuilder Partition
     $size = (Get-PartitionSupportedSize –DiskNumber 0 –PartitionNumber 2)
     Resize-Partition -DiskNumber 0 –PartitionNumber 2 -Size $size.SizeMax
-
-    #Bring Online D Disk
-    $DriveFound = $false
-    $Disk = Get-Disk | where Number -eq 1 
-    Set-Disk -Number $Disk.DiskNumber -IsOffline $false
-    Initialize-Disk $Disk.DiskNumber
-    $partition = New-Partition -DriveLetter D -UseMaximumSize -DiskNumber $Disk.DiskNumber
-    $volume = Format-Volume -FileSystem NTFS -NewFileSystemLabel $DDriveName -Confirm:$false -Force -Partition $partition
-
 
     # set IP Config
     $NetAdapter = Get-NetAdapter
@@ -500,7 +524,8 @@ Invoke-Command -Session $PSSession -ArgumentList $VMIP, $IPSubNetwithMask, $BGPN
     Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 
     #Find Windows Server ISO in ConfigDir
-    $WindowsServerISOName = (Get-Item -Path $($ConfigDir + '\*') -Include "*_SERVER_*.iso").FullName
+    $WindowsServer2016ISOName = (Get-Item -Path $($ConfigDir + '\*') -Include "*RS1*_SERVER_*.iso").FullName
+    $WindowsServer2019ISOName = (Get-Item -Path $($ConfigDir + '\*') -Include "*rs5*_SERVER_*.iso").FullName
 
     #create Azure Stack Installation Script
     "# Script to start Azure Stack Development Kit Installation" | Out-File -FilePath $InstallASDKScript
@@ -518,7 +543,8 @@ Invoke-Command -Session $PSSession -ArgumentList $VMIP, $IPSubNetwithMask, $BGPN
     " "  | Out-File -FilePath $InstallASDKScript -Append
     "# Script to configure Azure Stack Development Kit"  | Out-File -FilePath $InstallASDKScript -Append
     "Set-Location C:\CloudDeployment\Setup" | Out-File -FilePath $InstallASDKScript -Append
-    $OutPutString = './InstallAzureStackPOC.ps1 -AdminPassword $LocalAdminPWord -InfraAzureDirectoryTenantName "' + "$AzureTenenantName" +'" -InfraAzureDirectoryTenantAdminCredential $AADCredential -NATIPv4Subnet "' + "$IPSubnetwithMask" + '"' + " -NATIPv4Address $BGPNatIP -NATIPv4DefaultGateway $DefaultGatewayIP -TimeServer $NTPServerIP -Verbose"
+    #$OutPutString = './InstallAzureStackPOC.ps1 -AdminPassword $LocalAdminPWord -InfraAzureDirectoryTenantName "' + "$AzureTenenantName" +'" -InfraAzureDirectoryTenantAdminCredential $AADCredential -NATIPv4Subnet "' + "$IPSubnetwithMask" + '"' + " -NATIPv4Address $BGPNatIP -NATIPv4DefaultGateway $DefaultGatewayIP -TimeServer $NTPServerIP -Verbose"
+    $OutPutString = './InstallAzureStackPOC.ps1 -AdminPassword $LocalAdminPWord -InfraAzureDirectoryTenantName "' + "$AzureTenenantName" + '" -InfraAzureDirectoryTenantAdminCredential $AADCredential' + " -TimeServer $NTPServerIP -Verbose"
     $OutPutString |  Out-File -FilePath $InstallASDKScript -Append
  
 
@@ -539,9 +565,12 @@ Invoke-Command -Session $PSSession -ArgumentList $VMIP, $IPSubNetwithMask, $BGPN
 
     " "  | Out-File -FilePath $ConfigASKScript -Append
     "# Start the Azure Stack Configuration "  | Out-File -FilePath $ConfigASKScript -Append
-    #$OutPutString = '.\ConfigASDK.ps1 -azureDirectoryTenantName "' + $AzureTenenantName + '" -authenticationType AzureAD -registerASDK -useAzureCredsForRegistration -downloadPath "' + $ConfigDir + '" -ISOPath "' + $WindowsServerISOName + '" -azureStackAdminPwd "' + $LocalAdminPassword + '" -VMpwd "' + $LocalAdminPassword + '" -azureAdUsername "' + $AzureTenantAdminName +'" -azureAdPwd "' + $AzureTenantAdminPassword + '"'
-    $OutPutString = '.\ConfigASDK.ps1 -azureDirectoryTenantName "' + $AzureTenenantName + '" -authenticationType AzureAD -registerASDK -useAzureCredsForRegistration -azureRegSubId "' + $AzureTenantSubcriptionID + '" -downloadPath "' + $ConfigDir + '" -ISOPath "' + $WindowsServerISOName + '" -azureStackAdminPwd "' + $LocalAdminPassword + '" -VMpwd "' + $LocalAdminPassword + '" -azureAdUsername "' + $AzureTenantAdminName +'" -azureAdPwd "' + $AzureTenantAdminPassword + '"'
+    $OutPutString = '.\ConfigASDK.ps1 -azureDirectoryTenantName "' + $AzureTenenantName + '" -authenticationType AzureAD -registerASDK -useAzureCredsForRegistration -azureRegSubId "' + $AzureTenantSubcriptionID + '" -downloadPath "' + $ConfigDir + '" -ISOPath "' + $WindowsServer2016ISOName + '" -ISOPath2019 "' + $WindowsServer2019ISOName + '" -azureStackAdminPwd "' + $LocalAdminPassword + '" -VMpwd "' + $LocalAdminPassword + '" -azureAdUsername "' + $AzureTenantAdminName +'" -azureAdPwd "' + $AzureTenantAdminPassword + '"' 
     $OutPutString |  Out-File -FilePath $ConfigASKScript -Append
+
+    #remove Unattended File
+    $UnattendedPath = Get-ChildItem "C:\*Unattend.xml"
+    Remove-Item -Path $UnattendedPath -Verbose
 
 
     # Configure AutoLogin
@@ -557,6 +586,8 @@ Invoke-Command -Session $PSSession -ArgumentList $VMIP, $IPSubNetwithMask, $BGPN
     sleep 30
     Restart-Computer -Force
 }
+
+Remove-PSSession $PSSession
 #endregion
 
 Get-Date
