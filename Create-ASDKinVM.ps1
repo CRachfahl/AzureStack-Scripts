@@ -200,8 +200,6 @@ $DDriveName = 'DDrive'
 $DDriveSize = 50GB
 
 #VM releated
-$IPSubNetNAT = $IPSubnetwithMask
-#$IPSubNetNAT = $($VMIP.Substring(0,$VMIP.LastIndexOf('.')+1)+'0/'+[String]$IPSubnetwithMask)
 $DefaultGatewayIP = $VMGWIP
 $VMGeneration = 2
 $VMMemory = $MemoryinGB * 1024*1024*1024
@@ -312,15 +310,15 @@ function makeUnattendFile
   $unattend = $unattendSource.Clone();
      
   # Customize unattend XML
-  GetUnattendChunk 'specialize' 'Microsoft-Windows-Shell-Setup' $unattend | %{$_.ComputerName = $ComputerName};
-  GetUnattendChunk 'specialize' 'Microsoft-Windows-Shell-Setup' $unattend | %{$_.RegisteredOrganization = $Organization};
-  GetUnattendChunk 'specialize' 'Microsoft-Windows-Shell-Setup' $unattend | %{$_.RegisteredOwner = $Owner};
-  GetUnattendChunk 'specialize' 'Microsoft-Windows-Shell-Setup' $unattend | %{$_.TimeZone = $Timezone};
-  GetUnattendChunk 'oobeSystem' 'Microsoft-Windows-Shell-Setup' $unattend | %{$_.UserAccounts.AdministratorPassword.Value = $adminPassword};
-  GetUnattendChunk 'specialize' 'Microsoft-Windows-Shell-Setup' $unattend | %{$_.ProductKey = $WindowsKey};
-  GetUnattendChunk 'oobeSystem' 'Microsoft-Windows-International-Core' $unattend | %{$_.InputLocale = $InputLocale};
-  GetUnattendChunk 'oobeSystem' 'Microsoft-Windows-International-Core' $unattend | %{$_.SystemLocale = $SystemLocale};
-  GetUnattendChunk 'oobeSystem' 'Microsoft-Windows-International-Core' $unattend | %{$_.UserLocale = $UserLocale};
+  GetUnattendChunk 'specialize' 'Microsoft-Windows-Shell-Setup' $unattend | ForEach-Object{$_.ComputerName = $ComputerName};
+  GetUnattendChunk 'specialize' 'Microsoft-Windows-Shell-Setup' $unattend | ForEach-Object{$_.RegisteredOrganization = $Organization};
+  GetUnattendChunk 'specialize' 'Microsoft-Windows-Shell-Setup' $unattend | ForEach-Object{$_.RegisteredOwner = $Owner};
+  GetUnattendChunk 'specialize' 'Microsoft-Windows-Shell-Setup' $unattend | ForEach-Object{$_.TimeZone = $Timezone};
+  GetUnattendChunk 'oobeSystem' 'Microsoft-Windows-Shell-Setup' $unattend | ForEach-Object{$_.UserAccounts.AdministratorPassword.Value = $adminPassword};
+  GetUnattendChunk 'specialize' 'Microsoft-Windows-Shell-Setup' $unattend | ForEach-Object{$_.ProductKey = $WindowsKey};
+  GetUnattendChunk 'oobeSystem' 'Microsoft-Windows-International-Core' $unattend | ForEach-Object{$_.InputLocale = $InputLocale};
+  GetUnattendChunk 'oobeSystem' 'Microsoft-Windows-International-Core' $unattend | ForEach-Object{$_.SystemLocale = $SystemLocale};
+  GetUnattendChunk 'oobeSystem' 'Microsoft-Windows-International-Core' $unattend | ForEach-Object{$_.UserLocale = $UserLocale};
     
   # Write it out to disk
   cleanupFile $filePath; $Unattend.Save($filePath);
@@ -359,7 +357,7 @@ $VHD = Mount-VHD -Path $CloudBuilderVHDXPath –PassThru
 $OSVolumes = $VHD | Get-Disk | Get-Partition | Get-Volume
 $DriveLetterAssigned = $false
 foreach($Drive in $OSVolumes) {
-    if(($Drive.DriveLetter -ne '') -and ($Drive.DriveLetter -ne $Null)) {
+    if(($Drive.DriveLetter -ne '') -and ($null -ne $Drive.Driveletter)) {
         $IsOSDrive = Test-Path -Path $($Drive.DriveLetter + ':\Windows')
         if($IsOSDrive) {
             $DriveLetterAssigned = $true
@@ -583,7 +581,7 @@ Invoke-Command -Session $PSSession -ArgumentList $VMIP, $IPSubNetwithMask, $BGPN
     }
     Write-Output "Enable AutoLogon"
     Enable-AutoLogon -Username '.\Administrator' -Password $localAdminPWord -LogonCount 1 -ForceAutoLogon -Command "C:\Windows\System32\WindowsPowerShell\v1.0\Powershell.exe -executionPolicy Unrestricted -File $InstallASDKScript"
-    sleep 30
+    Start-Sleep 30
     Restart-Computer -Force
 }
 
