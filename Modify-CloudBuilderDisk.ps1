@@ -89,16 +89,16 @@ $BareMetalTestPSName = $($ZipExtractionPath+$BarMetalTestPatern)
 $BareMetalTestPs1NewName = $BareMetalTestPSName+'.txt'
 Rename-Item -Path $BareMetalTestPSName -NewName $BareMetalTestPs1NewName
 $BareMetalTestScriptObj = Get-Item -LiteralPath $BareMetalTestPs1NewName
-(Get-Content -LiteralPath $BareMetalTestPs1NewName) | foreach {$_ -Replace '-not \$isVirtualizedDeployment', '$isVirtualizedDeployment'} | Set-Content -LiteralPath $BarMetalTestPSName -Encoding String
+(Get-Content -LiteralPath $BareMetalTestPs1NewName) | foreach {$_ -Replace '-not \$isVirtualizedDeployment', '$isVirtualizedDeployment'} | Set-Content -LiteralPath $BareMetalTestPSName -Encoding String
 remove-item -LiteralPath $BareMetalTestPs1NewName
 
 #Copy File in Archive again
-$ArchiveEntryName = 'content/Roles/PhysicalMachines/Tests/'+(Split-Path $BarMetalTestPSName -Leaf)
+$ArchiveEntryName = 'content/Roles/PhysicalMachines/Tests/'+(Split-Path $BareMetalTestPSName -Leaf)
 $compressionLevel = [System.IO.Compression.CompressionLevel]::Optimal
 $zip = [System.IO.Compression.ZipFile]::Open($NuGetZipObj.FullName, 'update')
 $ArchiveEntryObj = $zip.GetEntry($ArchiveEntryName)
 $ArchiveEntryObj.Delete()
-[System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $BarMetalTestPSName, $ArchiveEntryName, $compressionLevel)
+[System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $BareMetalTestPSName, $ArchiveEntryName, $compressionLevel)
 $zip.Dispose()
 
 #Rename to NuPkg 
